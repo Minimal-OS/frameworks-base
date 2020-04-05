@@ -45,6 +45,7 @@ import com.android.systemui.SysUiServiceProvider;
 import com.android.systemui.UiOffloadThread;
 import com.android.systemui.qs.tiles.DndTile;
 import com.android.systemui.qs.tiles.RotationLockTile;
+import com.android.systemui.screenrecord.RecordingController;
 import com.android.systemui.statusbar.CommandQueue;
 import com.android.systemui.statusbar.policy.BluetoothController;
 import com.android.systemui.statusbar.policy.CastController;
@@ -77,7 +78,10 @@ public class PhoneStatusBarPolicy
                 ZenModeController.Callback,
                 DeviceProvisionedListener,
                 KeyguardMonitor.Callback,
-                LocationController.LocationChangeCallback {
+                LocationController.LocationChangeCallback,
+                PrivacyItemController.Callback,
+                LocationController.LocationChangeCallback,
+                RecordingController.RecordingStateListener {
     private static final String TAG = "PhoneStatusBarPolicy";
     private static final boolean DEBUG = Log.isLoggable(TAG, Log.DEBUG);
 
@@ -97,6 +101,7 @@ public class PhoneStatusBarPolicy
     private final String mSlotDataSaver;
     private final String mSlotLocation;
     private final String mSlotSensorsOff;
+    private final String mSlotScreenRecord;
 
     private final Context mContext;
     private final Handler mHandler = new Handler();
@@ -115,6 +120,7 @@ public class PhoneStatusBarPolicy
     private final LocationController mLocationController;
     private final UiOffloadThread mUiOffloadThread = Dependency.get(UiOffloadThread.class);
     private final SensorPrivacyController mSensorPrivacyController;
+    private final RecordingController mRecordingController;
 
     // Assume it's all good unless we hear otherwise.  We don't always seem
     // to get broadcasts that it *is* there.
@@ -146,6 +152,7 @@ public class PhoneStatusBarPolicy
         mKeyguardMonitor = Dependency.get(KeyguardMonitor.class);
         mLocationController = Dependency.get(LocationController.class);
         mSensorPrivacyController = Dependency.get(SensorPrivacyController.class);
+        mRecordingController = Dependency.get(RecordingController.class);
 
         mSlotCast = context.getString(com.android.internal.R.string.status_bar_cast);
         mSlotHotspot = context.getString(com.android.internal.R.string.status_bar_hotspot);
@@ -161,6 +168,7 @@ public class PhoneStatusBarPolicy
         mSlotDataSaver = context.getString(com.android.internal.R.string.status_bar_data_saver);
         mSlotLocation = context.getString(com.android.internal.R.string.status_bar_location);
         mSlotSensorsOff = context.getString(com.android.internal.R.string.status_bar_sensors_off);
+        mSlotScreenRecord = context.getString(R.string.status_bar_screen_record);
 
         // listen for broadcasts
         IntentFilter filter = new IntentFilter();
@@ -230,6 +238,10 @@ public class PhoneStatusBarPolicy
         mIconController.setIconVisibility(mSlotSensorsOff,
                 mSensorPrivacyController.isSensorPrivacyEnabled());
 
+        // screen record
+        mIconController.setIcon(mSlotScreenRecord, R.drawable.stat_sys_screen_record, (CharSequence) null);
+        mIconController.setIconVisibility(mSlotScreenRecord, false);
+
         mRotationLockController.addCallback(this);
         mBluetooth.addCallback(this);
         mProvisionedController.addCallback(this);
@@ -241,6 +253,7 @@ public class PhoneStatusBarPolicy
         mKeyguardMonitor.addCallback(this);
         mSensorPrivacyController.addCallback(mSensorPrivacyListener);
         mLocationController.addCallback(this);
+        mRecordingController.addCallback((RecordingController.RecordingStateListener) this);
 
         SysUiServiceProvider.getComponent(mContext, CommandQueue.class).addCallback(this);
     }
@@ -445,6 +458,7 @@ public class PhoneStatusBarPolicy
 
     private void updateCast() {
         boolean isCasting = false;
+        boolean isRecording = mRecordingController.isRecording();
         for (CastDevice device : mCast.getCastDevices()) {
             if (device.state == CastDevice.STATE_CONNECTING
                     || device.state == CastDevice.STATE_CONNECTED) {
@@ -454,7 +468,7 @@ public class PhoneStatusBarPolicy
         }
         if (DEBUG) Log.v(TAG, "updateCast: isCasting: " + isCasting);
         mHandler.removeCallbacks(mRemoveCastIconRunnable);
-        if (isCasting) {
+        if (isCasting && !isRecording) {
             mIconController.setIcon(mSlotCast, R.drawable.stat_sys_cast,
                     mContext.getString(R.string.accessibility_casting));
             mIconController.setIconVisibility(mSlotCast, true);
@@ -663,4 +677,43 @@ public class PhoneStatusBarPolicy
             mIconController.setIconVisibility(mSlotCast, false);
         }
     };
+
+    @Override
+    public void onCountdown(long millisUntilFinished) {
+        if (DEBUG) Log.d(TAG, "screenrecord: countdown " + millisUntilFinished);
+        int level = (int) Math.floorDiv(millisUntilFinished + 500, 1000);
+        int icon = R.drawable.stat_sys_screen_record;
+        if (level == 1) {
+            icon = R.drawable.stat_sys_screen_record_1;
+        } else if (level == 2) {
+            icon = R.drawable.stat_sys_screen_record_2;
+        } else if (level == 3) {
+            icon = R.drawable.stat_sys_screen_record_3;
+        }
+        mIconController.setIcon(mSlotScreenRecord, icon, (CharSequence) null);
+        mIconController.setIconVisibility(mSlotScreenRecord, true);
+    }
+
+    @Override
+    public void onCountdownEnd() {
+        if (DEBUG) Log.d(TAG, "screenrecord: hiding icon during countdown");
+        mHandler.post(() -> {
+            mIconController.setIconVisibility(mSlotScreenRecord, false);
+        });
+    }
+
+    @Override
+    public void onRecordingStart() {
+        if (DEBUG) Log.d(TAG, "screenrecord: showing icon");
+        mIconController.setIcon(mSlotScreenRecord, R.drawable.stat_sys_screen_record, (CharSequence) null);
+        mIconController.setIconVisibility(mSlotScreenRecord, true);
+    }
+
+    @Override
+    public void onRecordingEnd() {
+        if (DEBUG) Log.d(TAG, "screenrecord: hiding icon");
+        mHandler.post(() -> {
+            mIconController.setIconVisibility(mSlotScreenRecord, false);
+        });
+    }
 }
